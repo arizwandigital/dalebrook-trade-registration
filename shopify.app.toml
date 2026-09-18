@@ -1,7 +1,7 @@
 # Learn more about configuring your app at https://shopify.dev/docs/apps/tools/cli/configuration
 
 client_id = "294395a82eac68669ab8d57e4d32fca8"
-application_url = "https://sandybrown-fly-905230.hostingersite.com"
+application_url = "https://sandybrown-fly-905230.hostingersite.com/app"
 embedded = true
 name = "dalebrook-trade-registration"
 
@@ -10,7 +10,7 @@ name = "dalebrook-trade-registration"
 scopes = "read_metaobjects,write_metaobjects,read_files,write_files,write_app_proxy"
 
 [app_proxy]
-url = "/trade-account"
+url = "https://sandybrown-fly-905230.hostingersite.com/trade-account"
 prefix = "apps"
 subpath = "trade-account"
 
