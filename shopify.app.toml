@@ -1,34 +1,35 @@
 # Learn more about configuring your app at https://shopify.dev/docs/apps/tools/cli/configuration
 
 client_id = "294395a82eac68669ab8d57e4d32fca8"
+name = "dalebrook-trade-registration"
 application_url = "https://sandybrown-fly-905230.hostingersite.com/app"
 embedded = true
-name = "dalebrook-trade-registration"
 
-[access_scopes]
-# Learn more at https://shopify.dev/docs/apps/tools/cli/configuration#access_scopes
-scopes = "read_metaobjects,write_metaobjects,read_files,write_files,write_app_proxy"
-
-[app_proxy]
-url = "https://sandybrown-fly-905230.hostingersite.com/trade-account"
-prefix = "apps"
-subpath = "trade-account"
-
+[build]
+automatically_update_urls_on_dev = true
+include_config_on_deploy = true
 
 [webhooks]
 api_version = "2026-10"
 
   [[webhooks.subscriptions]]
-  uri = "/webhooks/app/uninstalled"
-  topics = [ "app/uninstalled" ]
-
-  [[webhooks.subscriptions]]
   uri = "/webhooks/app/scopes_update"
   topics = [ "app/scopes_update" ]
 
-[auth]
-redirect_urls = [ "https://sandybrown-fly-905230.hostingersite.com/auth/callback" ]
+  [[webhooks.subscriptions]]
+  uri = "/webhooks/app/uninstalled"
+  topics = [ "app/uninstalled" ]
 
-[build]
-include_config_on_deploy = true
-automatically_update_urls_on_dev = true
+[access_scopes]
+# Learn more at https://shopify.dev/docs/apps/tools/cli/configuration#access_scopes
+scopes = "read_files,read_metaobjects,write_app_proxy,write_files,write_metaobjects,read_customers,write_customers"
+
+[auth]
+redirect_urls = [
+  "https://sandybrown-fly-905230.hostingersite.com/auth/callback"
+]
+
+[app_proxy]
+url = "https://sandybrown-fly-905230.hostingersite.com/app/trade-account"
+subpath = "trade-account"
+prefix = "apps"
