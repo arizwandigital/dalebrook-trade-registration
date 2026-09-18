@@ -14,30 +14,20 @@ async function uploadCertificate(admin, file) {
   }
 
   if (!ALLOWED_TYPES.includes(file.type)) {
-    throw new Error(
-      "Certificate must be PDF, JPG or PNG."
-    );
+    throw new Error("Certificate must be PDF, JPG or PNG.");
   }
 
   if (file.size > MAX_FILE_SIZE) {
-    throw new Error(
-      "Certificate must be 10MB or smaller."
-    );
+    throw new Error("Certificate must be 10MB or smaller.");
   }
 
-  /*
-    1. Ask Shopify for a temporary staged upload target
-  */
   const stagedResponse = await admin.graphql(
     `#graphql
-      mutation StagedUploadsCreate(
-        $input: [StagedUploadInput!]!
-      ) {
+      mutation StagedUploadsCreate($input: [StagedUploadInput!]!) {
         stagedUploadsCreate(input: $input) {
           stagedTargets {
             url
             resourceUrl
-
             parameters {
               name
               value
@@ -65,11 +55,8 @@ async function uploadCertificate(admin, file) {
     }
   );
 
-  const stagedJson =
-    await stagedResponse.json();
-
-  const stagedPayload =
-    stagedJson?.data?.stagedUploadsCreate;
+  const stagedJson = await stagedResponse.json();
+  const stagedPayload = stagedJson?.data?.stagedUploadsCreate;
 
   if (stagedPayload?.userErrors?.length) {
     console.error(
@@ -83,8 +70,7 @@ async function uploadCertificate(admin, file) {
     );
   }
 
-  const target =
-    stagedPayload?.stagedTargets?.[0];
+  const target = stagedPayload?.stagedTargets?.[0];
 
   if (!target) {
     throw new Error(
@@ -92,9 +78,6 @@ async function uploadCertificate(admin, file) {
     );
   }
 
-  /*
-    2. Upload actual binary file
-  */
   const uploadForm = new FormData();
 
   for (const parameter of target.parameters) {
@@ -119,10 +102,9 @@ async function uploadCertificate(admin, file) {
   );
 
   if (!uploadResponse.ok) {
-    const uploadError =
-      await uploadResponse
-        .text()
-        .catch(() => "");
+    const uploadError = await uploadResponse
+      .text()
+      .catch(() => "");
 
     console.error(
       "Certificate binary upload failed:",
@@ -134,50 +116,37 @@ async function uploadCertificate(admin, file) {
     );
   }
 
-  /*
-    3. Create permanent Shopify file
-  */
-  const fileCreateResponse =
-    await admin.graphql(
-      `#graphql
-        mutation FileCreate(
-          $files: [FileCreateInput!]!
-        ) {
-          fileCreate(files: $files) {
-            files {
-              id
-              fileStatus
-            }
+  const fileCreateResponse = await admin.graphql(
+    `#graphql
+      mutation FileCreate($files: [FileCreateInput!]!) {
+        fileCreate(files: $files) {
+          files {
+            id
+            fileStatus
+          }
 
-            userErrors {
-              field
-              message
-            }
+          userErrors {
+            field
+            message
           }
         }
-      `,
-      {
-        variables: {
-          files: [
-            {
-              originalSource:
-                target.resourceUrl,
-
-              contentType: "FILE",
-
-              alt:
-                `Certificate of Incorporation - ${file.name}`,
-            },
-          ],
-        },
       }
-    );
+    `,
+    {
+      variables: {
+        files: [
+          {
+            originalSource: target.resourceUrl,
+            contentType: "FILE",
+            alt: `Certificate of Incorporation - ${file.name}`,
+          },
+        ],
+      },
+    }
+  );
 
-  const fileJson =
-    await fileCreateResponse.json();
-
-  const filePayload =
-    fileJson?.data?.fileCreate;
+  const fileJson = await fileCreateResponse.json();
+  const filePayload = fileJson?.data?.fileCreate;
 
   if (filePayload?.userErrors?.length) {
     console.error(
@@ -191,8 +160,7 @@ async function uploadCertificate(admin, file) {
     );
   }
 
-  const createdFile =
-    filePayload?.files?.[0];
+  const createdFile = filePayload?.files?.[0];
 
   if (!createdFile?.id) {
     console.error(
@@ -210,92 +178,27 @@ async function uploadCertificate(admin, file) {
 
 export async function action({ request }) {
   try {
-    /*
-      --------------------------------------------------
-      APP PROXY DEBUG
-      --------------------------------------------------
-      Do not log the actual signature.
-    */
-    const proxyUrl =
-      new URL(request.url);
-
-    console.log(
-      "[APP PROXY DEBUG]",
-      {
-        pathname:
-          proxyUrl.pathname,
-
-        shop:
-          proxyUrl.searchParams.get(
-            "shop"
-          ),
-
-        pathPrefix:
-          proxyUrl.searchParams.get(
-            "path_prefix"
-          ),
-
-        timestamp:
-          proxyUrl.searchParams.get(
-            "timestamp"
-          ),
-
-        loggedInCustomerId:
-          proxyUrl.searchParams.get(
-            "logged_in_customer_id"
-          ),
-
-        hasSignature:
-          proxyUrl.searchParams.has(
-            "signature"
-          ),
-
-        signatureLength:
-          proxyUrl.searchParams.get(
-            "signature"
-          )?.length || 0,
-      }
-    );
-
-    /*
-      --------------------------------------------------
-      AUTHENTICATE SHOPIFY APP PROXY
-      --------------------------------------------------
-    */
     let admin;
 
     try {
       const authContext =
-        await authenticate.public.appProxy(
-          request
-        );
+        await authenticate.public.appProxy(request);
 
       admin = authContext?.admin;
-
-      console.log(
-        "[APP PROXY AUTH]",
-        "Authentication successful"
-      );
     } catch (authError) {
       console.error(
         "[APP PROXY AUTH FAILED]",
         {
-          name:
-            authError?.name,
-
-          message:
-            authError?.message,
-
-          status:
-            authError?.status,
+          name: authError?.name,
+          message: authError?.message,
+          status: authError?.status,
         }
       );
 
       return Response.json(
         {
           success: false,
-          message:
-            "App proxy authentication failed.",
+          message: "App proxy authentication failed.",
         },
         {
           status: 401,
@@ -303,11 +206,6 @@ export async function action({ request }) {
       );
     }
 
-    /*
-      We require Admin API access because
-      this route uploads a file and creates
-      a metaobject.
-    */
     if (!admin) {
       console.error(
         "[APP PROXY AUTH]",
@@ -317,8 +215,7 @@ export async function action({ request }) {
       return Response.json(
         {
           success: false,
-          message:
-            "App proxy authentication failed.",
+          message: "App proxy authentication failed.",
         },
         {
           status: 401,
@@ -326,17 +223,10 @@ export async function action({ request }) {
       );
     }
 
-    /*
-      --------------------------------------------------
-      READ FORM
-      --------------------------------------------------
-    */
-    const formData =
-      await request.formData();
+    const formData = await request.formData();
 
     const getValue = (key) => {
-      const value =
-        formData.get(key);
+      const value = formData.get(key);
 
       return typeof value === "string"
         ? value.trim()
@@ -352,11 +242,6 @@ export async function action({ request }) {
     const email =
       getValue("email");
 
-    /*
-      --------------------------------------------------
-      REQUIRED VALUES
-      --------------------------------------------------
-    */
     if (
       !companyName ||
       !contactName ||
@@ -365,7 +250,6 @@ export async function action({ request }) {
       return Response.json(
         {
           success: false,
-
           message:
             "Company name, contact name and email are required.",
         },
@@ -375,11 +259,6 @@ export async function action({ request }) {
       );
     }
 
-    /*
-      --------------------------------------------------
-      CERTIFICATE
-      --------------------------------------------------
-    */
     const certificate =
       formData.get(
         "certificate_of_incorporation"
@@ -393,7 +272,6 @@ export async function action({ request }) {
       return Response.json(
         {
           success: false,
-
           message:
             "Certificate of Incorporation is required.",
         },
@@ -409,11 +287,6 @@ export async function action({ request }) {
         certificate
       );
 
-    /*
-      --------------------------------------------------
-      CREDIT TERMS
-      --------------------------------------------------
-    */
     const creditRequested = [
       "true",
       "on",
@@ -427,11 +300,6 @@ export async function action({ request }) {
       ).toLowerCase()
     );
 
-    /*
-      --------------------------------------------------
-      METAOBJECT VALUES
-      --------------------------------------------------
-    */
     const values = {
       company_name:
         companyName,
@@ -505,11 +373,6 @@ export async function action({ request }) {
         new Date().toISOString(),
     };
 
-    /*
-      --------------------------------------------------
-      CREATE TRADE REGISTRATION METAOBJECT
-      --------------------------------------------------
-    */
     const response =
       await admin.graphql(
         `#graphql
@@ -551,11 +414,6 @@ export async function action({ request }) {
     const payload =
       result?.data?.metaobjectCreate;
 
-    /*
-      --------------------------------------------------
-      SHOPIFY USER ERRORS
-      --------------------------------------------------
-    */
     if (
       payload?.userErrors?.length
     ) {
@@ -567,10 +425,8 @@ export async function action({ request }) {
       return Response.json(
         {
           success: false,
-
           message:
             "Shopify could not create the registration.",
-
           errors:
             payload.userErrors,
         },
@@ -589,7 +445,6 @@ export async function action({ request }) {
       return Response.json(
         {
           success: false,
-
           message:
             "Unexpected Shopify API response.",
         },
@@ -599,11 +454,6 @@ export async function action({ request }) {
       );
     }
 
-    /*
-      --------------------------------------------------
-      SUCCESS
-      --------------------------------------------------
-    */
     console.log(
       "[TRADE REGISTRATION CREATED]",
       {
@@ -649,7 +499,6 @@ export async function action({ request }) {
     return Response.json(
       {
         success: false,
-
         message:
           error?.message ||
           "Unable to submit registration.",
