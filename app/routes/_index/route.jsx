@@ -1,4 +1,18 @@
-import { Form } from "react-router";
+import { Form, redirect } from "react-router";
+export async function loader({ request }) {
+  const url = new URL(request.url);
+
+  const isShopifyAdmin =
+    url.searchParams.has("shop") ||
+    url.searchParams.has("host") ||
+    url.searchParams.get("embedded") === "1";
+
+  if (isShopifyAdmin) {
+    return redirect(`/app${url.search}`);
+  }
+
+  return null;
+}
 
 export default function App() {
   return (

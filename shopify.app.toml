@@ -1,7 +1,7 @@
 # Learn more about configuring your app at https://shopify.dev/docs/apps/tools/cli/configuration
 
 client_id = "294395a82eac68669ab8d57e4d32fca8"
-application_url = "https://sandybrown-fly-905230.hostingersite.com/app"
+application_url = "https://sandybrown-fly-905230.hostingersite.com"
 embedded = true
 name = "dalebrook-trade-registration"
 
@@ -30,4 +30,5 @@ api_version = "2026-10"
 redirect_urls = [ "https://sandybrown-fly-905230.hostingersite.com/auth/callback" ]
 
 [build]
+include_config_on_deploy = true
 automatically_update_urls_on_dev = true
