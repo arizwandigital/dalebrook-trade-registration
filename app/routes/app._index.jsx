@@ -1,94 +1,142 @@
-import { useEffect } from "react";
-import { useFetcher } from "react-router";
-import { useAppBridge } from "@shopify/app-bridge-react";
-import { authenticate } from "../shopify.server";
+import { useEffect, useState } from "react";
+
+import {
+  useFetcher,
+} from "react-router";
+
+import {
+  useAppBridge,
+} from "@shopify/app-bridge-react";
+
+import {
+  authenticate,
+} from "../shopify.server";
 
 export const loader = async ({ request }) => {
   await authenticate.admin(request);
+
   return null;
 };
 
 export const action = async ({ request }) => {
-  const { admin } = await authenticate.admin(request);
+  const { admin } =
+    await authenticate.admin(request);
 
-  const response = await admin.graphql(
-    `#graphql
-      query TradeAccountDashboard {
-        metaobjects(
-          type: "trade_account_registration"
-          first: 25
-          reverse: true
-        ) {
-          nodes {
-            id
-            displayName
-            updatedAt
+  const response =
+    await admin.graphql(
+      `#graphql
+        query TradeAccountDashboard {
+          metaobjects(
+            type: "trade_account_registration"
+            first: 25
+            reverse: true
+          ) {
+            nodes {
+              id
+              displayName
+              updatedAt
 
-            fields {
-              key
-              value
-              jsonValue
+              fields {
+                key
+                value
+                jsonValue
+              }
             }
           }
         }
-      }
-    `
-  );
+      `
+    );
 
-  const json = await response.json();
+  const json =
+    await response.json();
 
   if (json.errors?.length) {
-    console.error("Dashboard GraphQL errors:", json.errors);
+    console.error(
+      "Dashboard GraphQL errors:",
+      json.errors
+    );
 
     return {
       success: false,
-      message: "Unable to load trade registrations.",
+      message:
+        "Unable to load trade registrations.",
       errors: json.errors,
     };
   }
 
   const registrations =
-    json?.data?.metaobjects?.nodes?.map((node) => {
-      const fields = Object.fromEntries(
-        (node.fields || []).map((field) => [
-          field.key,
-          field.jsonValue ?? field.value,
-        ])
-      );
+    json?.data?.metaobjects?.nodes?.map(
+      (node) => {
+        const fields =
+          Object.fromEntries(
+            (node.fields || []).map(
+              (field) => [
+                field.key,
+                field.jsonValue ??
+                  field.value,
+              ]
+            )
+          );
 
-      return {
-        id: node.id,
+        return {
+          id: node.id,
 
-        companyName:
-          fields.company_name ||
-          node.displayName ||
-          "",
+          companyName:
+            fields.company_name ||
+            node.displayName ||
+            "",
 
-        contactName:
-          fields.contact_name || "",
+          contactName:
+            fields.contact_name ||
+            "",
 
-        email:
-          fields.email || "",
+          email:
+            fields.email ||
+            "",
 
-        phone:
-          fields.phone || "",
+          phone:
+            fields.phone ||
+            "",
 
-        status:
-          fields.status || "Pending",
+          status:
+            fields.status ||
+            "Pending",
 
-        integrationStatus:
-          fields.integration_status ||
-          "Awaiting BC",
+          integrationStatus:
+            fields.integration_status ||
+            "Awaiting BC",
 
-        bcCustomerNumber:
-          fields.bc_customer_number || "",
+          bcCustomerNumber:
+            fields.bc_customer_number ||
+            "",
 
-        submittedAt:
-          fields.submitted_at ||
-          node.updatedAt ||
-          "",
-      };
-    }) || [];
+          shopifyCustomerId:
+            fields.shopify_customer_id ||
+            "",
+
+          approvedAt:
+            fields.approved_at ||
+            "",
+
+          approvedBy:
+            fields.approved_by ||
+            "",
+
+          rejectedAt:
+            fields.rejected_at ||
+            "",
+
+          rejectionReason:
+            fields.rejection_reason ||
+            "",
+
+          submittedAt:
+            fields.submitted_at ||
+            node.updatedAt ||
+            "",
+        };
+      }
+    ) || [];
 
   return {
     success: true,
@@ -97,17 +145,33 @@ export const action = async ({ request }) => {
 };
 
 export default function Index() {
-  const fetcher = useFetcher();
-  const shopify = useAppBridge();
+  const dashboardFetcher =
+    useFetcher();
 
-  const data = fetcher.data;
+  const approvalFetcher =
+    useFetcher();
 
+  const shopify =
+    useAppBridge();
+
+  const [
+    approvingId,
+    setApprovingId,
+  ] = useState(null);
+
+  const data =
+    dashboardFetcher.data;
+
+  /*
+   * Load dashboard automatically.
+   */
   useEffect(() => {
     if (
-      !fetcher.data &&
-      fetcher.state === "idle"
+      !dashboardFetcher.data &&
+      dashboardFetcher.state ===
+        "idle"
     ) {
-      fetcher.submit(
+      dashboardFetcher.submit(
         {},
         {
           method: "POST",
@@ -116,14 +180,71 @@ export default function Index() {
     }
   }, []);
 
+  /*
+   * Dashboard load errors.
+   */
   useEffect(() => {
-    if (data?.success === false) {
+    if (
+      data?.success === false
+    ) {
       shopify.toast.show(
         data.message ||
           "Unable to load registrations"
       );
     }
   }, [data, shopify]);
+
+  /*
+   * Handle approval response.
+   */
+  useEffect(() => {
+    if (
+      approvalFetcher.state !==
+        "idle" ||
+      !approvalFetcher.data
+    ) {
+      return;
+    }
+
+    const result =
+      approvalFetcher.data;
+
+    setApprovingId(null);
+
+    if (!result.success) {
+      shopify.toast.show(
+        result.message ||
+          "Unable to approve registration"
+      );
+
+      return;
+    }
+
+    if (result.created) {
+      shopify.toast.show(
+        "Trade customer created and registration approved"
+      );
+    } else {
+      shopify.toast.show(
+        "Existing Shopify customer approved as trade customer"
+      );
+    }
+
+    /*
+     * Reload registration data so
+     * status/customer ID changes appear.
+     */
+    dashboardFetcher.submit(
+      {},
+      {
+        method: "POST",
+      }
+    );
+  }, [
+    approvalFetcher.state,
+    approvalFetcher.data,
+    shopify,
+  ]);
 
   const registrations =
     data?.registrations || [];
@@ -132,6 +253,12 @@ export default function Index() {
     registrations.filter(
       (item) =>
         item.status === "Pending"
+    ).length;
+
+  const approvedCount =
+    registrations.filter(
+      (item) =>
+        item.status === "Approved"
     ).length;
 
   const awaitingBcCount =
@@ -149,11 +276,12 @@ export default function Index() {
     ).length;
 
   const loading =
-    fetcher.state !== "idle" &&
-    !fetcher.data;
+    dashboardFetcher.state !==
+      "idle" &&
+    !dashboardFetcher.data;
 
   const refreshDashboard = () => {
-    fetcher.submit(
+    dashboardFetcher.submit(
       {},
       {
         method: "POST",
@@ -161,104 +289,178 @@ export default function Index() {
     );
   };
 
-  const downloadExport = async (format) => {
-    try {
-      console.log(
-        `[Trade Registration] Starting ${format} export`
+  const approveRegistration =
+    (registration) => {
+      if (
+        !registration?.id ||
+        approvalFetcher.state !==
+          "idle"
+      ) {
+        return;
+      }
+
+      const confirmed =
+        window.confirm(
+          `Approve ${registration.companyName} as a trade customer?\n\nThis will create or update the Shopify customer and mark the registration as Approved.`
+        );
+
+      if (!confirmed) {
+        return;
+      }
+
+      setApprovingId(
+        registration.id
       );
 
-      const response = await fetch(
-        `/app/export/${format}`,
+      approvalFetcher.submit(
         {
-          method: "GET",
-          credentials: "include",
-
-          headers: {
-            Accept:
-              format === "json"
-                ? "application/json"
-                : format === "csv"
-                  ? "text/csv"
-                  : "application/xml",
-          },
+          registration_id:
+            registration.id,
+        },
+        {
+          method: "POST",
+          action:
+            "/app/approve-registration",
         }
       );
+    };
 
-      console.log(
-        `[Trade Registration] ${format} export response:`,
-        response.status
-      );
+  const getCustomerAdminUrl =
+    (customerId) => {
+      if (!customerId) {
+        return "";
+      }
 
-      if (!response.ok) {
-        const errorText =
-          await response.text();
+      const numericId =
+        String(customerId)
+          .split("/")
+          .pop();
 
+      return numericId
+        ? `shopify://admin/customers/${numericId}`
+        : "";
+    };
+
+  const downloadExport =
+    async (format) => {
+      try {
+        console.log(
+          `[Trade Registration] Starting ${format} export`
+        );
+
+        const response =
+          await fetch(
+            `/app/export/${format}`,
+            {
+              method: "GET",
+              credentials:
+                "include",
+
+              headers: {
+                Accept:
+                  format ===
+                  "json"
+                    ? "application/json"
+                    : format ===
+                        "csv"
+                      ? "text/csv"
+                      : "application/xml",
+              },
+            }
+          );
+
+        console.log(
+          `[Trade Registration] ${format} export response:`,
+          response.status
+        );
+
+        if (!response.ok) {
+          const errorText =
+            await response.text();
+
+          console.error(
+            `[Trade Registration] ${format} export failed:`,
+            response.status,
+            errorText
+          );
+
+          throw new Error(
+            `Unable to export ${format.toUpperCase()}`
+          );
+        }
+
+        const blob =
+          await response.blob();
+
+        if (
+          !blob ||
+          blob.size === 0
+        ) {
+          throw new Error(
+            `${format.toUpperCase()} export returned an empty file`
+          );
+        }
+
+        const downloadUrl =
+          window.URL.createObjectURL(
+            blob
+          );
+
+        const link =
+          document.createElement(
+            "a"
+          );
+
+        link.href =
+          downloadUrl;
+
+        link.download =
+          `trade-account-registrations.${format}`;
+
+        link.style.display =
+          "none";
+
+        document.body.appendChild(
+          link
+        );
+
+        link.click();
+        link.remove();
+
+        setTimeout(() => {
+          window.URL
+            .revokeObjectURL(
+              downloadUrl
+            );
+        }, 1500);
+
+        shopify.toast.show(
+          `${format.toUpperCase()} export downloaded`
+        );
+      } catch (error) {
         console.error(
-          `[Trade Registration] ${format} export failed:`,
-          response.status,
-          errorText
+          "[Trade Registration] Export error:",
+          error
         );
 
-        throw new Error(
-          `Unable to export ${format.toUpperCase()}`
-        );
-      }
-
-      const blob = await response.blob();
-
-      if (!blob || blob.size === 0) {
-        throw new Error(
-          `${format.toUpperCase()} export returned an empty file`
+        shopify.toast.show(
+          error?.message ||
+            "Export failed"
         );
       }
-
-      const downloadUrl =
-        window.URL.createObjectURL(blob);
-
-      const link =
-        document.createElement("a");
-
-      link.href = downloadUrl;
-
-      link.download =
-        `trade-account-registrations.${format}`;
-
-      link.style.display = "none";
-
-      document.body.appendChild(link);
-
-      link.click();
-
-      link.remove();
-
-      setTimeout(() => {
-        window.URL.revokeObjectURL(
-          downloadUrl
-        );
-      }, 1500);
-
-      shopify.toast.show(
-        `${format.toUpperCase()} export downloaded`
-      );
-    } catch (error) {
-      console.error(
-        "[Trade Registration] Export error:",
-        error
-      );
-
-      shopify.toast.show(
-        error?.message ||
-          "Export failed"
-      );
-    }
-  };
+    };
 
   return (
     <s-page heading="Dalebrook Trade Registration">
       <s-button
         slot="primary-action"
-        onClick={refreshDashboard}
-        loading={fetcher.state !== "idle"}
+        onClick={
+          refreshDashboard
+        }
+        loading={
+          dashboardFetcher.state !==
+          "idle"
+        }
       >
         Refresh
       </s-button>
@@ -269,7 +471,9 @@ export default function Index() {
           gap="base"
         >
           <s-banner tone="success">
-            Registration API is active and connected to Shopify.
+            Registration API is
+            active and connected
+            to Shopify.
           </s-banner>
 
           <s-grid
@@ -290,7 +494,9 @@ export default function Index() {
                 </s-text>
 
                 <s-heading>
-                  {registrations.length}
+                  {
+                    registrations.length
+                  }
                 </s-heading>
               </s-stack>
             </s-box>
@@ -324,11 +530,32 @@ export default function Index() {
                 gap="small"
               >
                 <s-text tone="subdued">
+                  Approved
+                </s-text>
+
+                <s-heading>
+                  {approvedCount}
+                </s-heading>
+              </s-stack>
+            </s-box>
+
+            <s-box
+              padding="base"
+              borderWidth="base"
+              borderRadius="base"
+            >
+              <s-stack
+                direction="block"
+                gap="small"
+              >
+                <s-text tone="subdued">
                   Awaiting BC
                 </s-text>
 
                 <s-heading>
-                  {awaitingBcCount}
+                  {
+                    awaitingBcCount
+                  }
                 </s-heading>
               </s-stack>
             </s-box>
@@ -355,13 +582,267 @@ export default function Index() {
         </s-stack>
       </s-section>
 
+      <s-section heading="Latest registrations">
+        {loading ? (
+          <s-text>
+            Loading
+            registrations...
+          </s-text>
+        ) : registrations.length ===
+          0 ? (
+          <s-text tone="subdued">
+            No trade account
+            registrations found
+            yet.
+          </s-text>
+        ) : (
+          <s-stack
+            direction="block"
+            gap="base"
+          >
+            {registrations.map(
+              (registration) => {
+                const isPending =
+                  registration.status ===
+                  "Pending";
+
+                const isApproved =
+                  registration.status ===
+                  "Approved";
+
+                const isApproving =
+                  approvingId ===
+                    registration.id &&
+                  approvalFetcher.state !==
+                    "idle";
+
+                const customerUrl =
+                  getCustomerAdminUrl(
+                    registration.shopifyCustomerId
+                  );
+
+                return (
+                  <s-box
+                    key={
+                      registration.id
+                    }
+                    padding="base"
+                    borderWidth="base"
+                    borderRadius="base"
+                  >
+                    <s-stack
+                      direction="block"
+                      gap="base"
+                    >
+                      <s-stack
+                        direction="inline"
+                        gap="base"
+                      >
+                        <s-heading>
+                          {
+                            registration.companyName
+                          }
+                        </s-heading>
+
+                        {isApproved ? (
+                          <s-badge tone="success">
+                            Approved
+                          </s-badge>
+                        ) : (
+                          <s-badge tone="attention">
+                            {
+                              registration.status
+                            }
+                          </s-badge>
+                        )}
+                      </s-stack>
+
+                      <s-grid
+                        gridTemplateColumns="repeat(auto-fit, minmax(220px, 1fr))"
+                        gap="base"
+                      >
+                        <s-stack
+                          direction="block"
+                          gap="small"
+                        >
+                          <s-text tone="subdued">
+                            Contact
+                          </s-text>
+
+                          <s-text>
+                            {registration.contactName ||
+                              "—"}
+                          </s-text>
+
+                          <s-text>
+                            {registration.email ||
+                              "—"}
+                          </s-text>
+
+                          <s-text>
+                            {registration.phone ||
+                              "—"}
+                          </s-text>
+                        </s-stack>
+
+                        <s-stack
+                          direction="block"
+                          gap="small"
+                        >
+                          <s-text tone="subdued">
+                            Workflow
+                          </s-text>
+
+                          <s-text>
+                            Application:{" "}
+                            {
+                              registration.status
+                            }
+                          </s-text>
+
+                          <s-text>
+                            BC:{" "}
+                            {
+                              registration.integrationStatus
+                            }
+                          </s-text>
+
+                          {registration.bcCustomerNumber ? (
+                            <s-text>
+                              BC Customer
+                              No.:{" "}
+                              {
+                                registration.bcCustomerNumber
+                              }
+                            </s-text>
+                          ) : null}
+                        </s-stack>
+
+                        <s-stack
+                          direction="block"
+                          gap="small"
+                        >
+                          <s-text tone="subdued">
+                            Shopify customer
+                          </s-text>
+
+                          {registration.shopifyCustomerId ? (
+                            <>
+                              <s-badge tone="success">
+                                Created
+                              </s-badge>
+
+                              <s-text>
+                                {
+                                  registration.shopifyCustomerId
+                                }
+                              </s-text>
+                            </>
+                          ) : (
+                            <s-badge>
+                              Not created
+                            </s-badge>
+                          )}
+                        </s-stack>
+
+                        <s-stack
+                          direction="block"
+                          gap="small"
+                        >
+                          <s-text tone="subdued">
+                            Submitted
+                          </s-text>
+
+                          <s-text>
+                            {registration.submittedAt
+                              ? new Date(
+                                  registration.submittedAt
+                                ).toLocaleString()
+                              : "—"}
+                          </s-text>
+
+                          {registration.approvedAt ? (
+                            <s-text>
+                              Approved:{" "}
+                              {new Date(
+                                registration.approvedAt
+                              ).toLocaleString()}
+                            </s-text>
+                          ) : null}
+
+                          {registration.approvedBy ? (
+                            <s-text>
+                              By:{" "}
+                              {
+                                registration.approvedBy
+                              }
+                            </s-text>
+                          ) : null}
+                        </s-stack>
+                      </s-grid>
+
+                      <s-stack
+                        direction="inline"
+                        gap="base"
+                      >
+                        {isPending ? (
+                          <s-button
+                            variant="primary"
+                            loading={
+                              isApproving
+                            }
+                            disabled={
+                              approvalFetcher.state !==
+                                "idle" &&
+                              !isApproving
+                            }
+                            onClick={() =>
+                              approveRegistration(
+                                registration
+                              )
+                            }
+                          >
+                            Approve customer
+                          </s-button>
+                        ) : null}
+
+                        {customerUrl ? (
+                          <s-button
+                            href={
+                              customerUrl
+                            }
+                          >
+                            View Shopify customer
+                          </s-button>
+                        ) : null}
+
+                        {!isPending &&
+                        !customerUrl ? (
+                          <s-text tone="subdued">
+                            No action
+                            required
+                          </s-text>
+                        ) : null}
+                      </s-stack>
+                    </s-stack>
+                  </s-box>
+                );
+              }
+            )}
+          </s-stack>
+        )}
+      </s-section>
+
       <s-section heading="Export registration data">
         <s-stack
           direction="block"
           gap="base"
         >
           <s-text>
-            Download all Trade Account Registration records directly from Shopify.
+            Download all Trade
+            Account Registration
+            records directly from
+            Shopify.
           </s-text>
 
           <s-stack
@@ -370,7 +851,9 @@ export default function Index() {
           >
             <s-button
               onClick={() =>
-                downloadExport("json")
+                downloadExport(
+                  "json"
+                )
               }
             >
               Download JSON
@@ -378,7 +861,9 @@ export default function Index() {
 
             <s-button
               onClick={() =>
-                downloadExport("csv")
+                downloadExport(
+                  "csv"
+                )
               }
             >
               Download CSV
@@ -386,7 +871,9 @@ export default function Index() {
 
             <s-button
               onClick={() =>
-                downloadExport("xml")
+                downloadExport(
+                  "xml"
+                )
               }
             >
               Download XML
@@ -394,7 +881,12 @@ export default function Index() {
           </s-stack>
 
           <s-text tone="subdued">
-            Exports include company, address, contact, tax, credit, certificate and Business Central workflow information.
+            Exports include
+            company, address,
+            contact, tax, credit,
+            certificate and
+            Business Central
+            workflow information.
           </s-text>
         </s-stack>
       </s-section>
@@ -405,126 +897,51 @@ export default function Index() {
           gap="small"
         >
           <s-text>
-            ✓ Trade registration form connected
+            ✓ Trade registration
+            form connected
           </s-text>
 
           <s-text>
-            ✓ Metaobject storage active
+            ✓ Metaobject storage
+            active
           </s-text>
 
           <s-text>
-            ✓ Certificate upload active
+            ✓ Certificate upload
+            active
           </s-text>
 
           <s-text>
-            ✓ External JSON feed active
+            ✓ External JSON feed
+            active
           </s-text>
 
           <s-text>
-            ✓ JSON admin export enabled
+            ✓ JSON admin export
+            enabled
           </s-text>
 
           <s-text>
-            ✓ CSV admin export enabled
+            ✓ CSV admin export
+            enabled
           </s-text>
 
           <s-text>
-            ✓ XML admin export enabled
+            ✓ XML admin export
+            enabled
           </s-text>
 
           <s-text>
-            ✓ Shopify App Proxy active
+            ✓ Shopify App Proxy
+            active
+          </s-text>
+
+          <s-text>
+            ✓ Trade customer
+            approval workflow
+            enabled
           </s-text>
         </s-stack>
-      </s-section>
-
-      <s-section heading="Latest registrations">
-        {loading ? (
-          <s-text>
-            Loading registrations...
-          </s-text>
-        ) : registrations.length === 0 ? (
-          <s-text tone="subdued">
-            No trade account registrations found yet.
-          </s-text>
-        ) : (
-          <s-stack
-            direction="block"
-            gap="base"
-          >
-            {registrations.map(
-              (registration) => (
-                <s-box
-                  key={registration.id}
-                  padding="base"
-                  borderWidth="base"
-                  borderRadius="base"
-                >
-                  <s-stack
-                    direction="block"
-                    gap="small"
-                  >
-                    <s-heading>
-                      {
-                        registration.companyName
-                      }
-                    </s-heading>
-
-                    <s-text>
-                      Contact:{" "}
-                      {registration.contactName ||
-                        "—"}
-                    </s-text>
-
-                    <s-text>
-                      Email:{" "}
-                      {registration.email ||
-                        "—"}
-                    </s-text>
-
-                    <s-text>
-                      Phone:{" "}
-                      {registration.phone ||
-                        "—"}
-                    </s-text>
-
-                    <s-text>
-                      Application status:{" "}
-                      {
-                        registration.status
-                      }
-                    </s-text>
-
-                    <s-text>
-                      Integration status:{" "}
-                      {
-                        registration.integrationStatus
-                      }
-                    </s-text>
-
-                    {registration.bcCustomerNumber ? (
-                      <s-text>
-                        BC Customer No.:{" "}
-                        {
-                          registration.bcCustomerNumber
-                        }
-                      </s-text>
-                    ) : null}
-
-                    <s-text tone="subdued">
-                      Submitted:{" "}
-                      {registration.submittedAt
-                        ? new Date(
-                            registration.submittedAt
-                          ).toLocaleString()
-                        : "—"}
-                    </s-text>
-                  </s-stack>
-                </s-box>
-              )
-            )}
-          </s-stack>
-        )}
       </s-section>
 
       <s-section heading="Business Central integration">
@@ -533,11 +950,27 @@ export default function Index() {
           gap="small"
         >
           <s-text>
-            Trade Account Registration submissions are stored in Shopify as metaobjects.
+            Trade Account
+            Registration
+            submissions are stored
+            in Shopify as
+            metaobjects.
           </s-text>
 
           <s-text>
-            The automated external Business Central integration feed is available through:
+            Shopify customers are
+            created only after the
+            application is approved
+            by Shopify Admin or,
+            later, by Business
+            Central.
+          </s-text>
+
+          <s-text>
+            The automated external
+            Business Central
+            integration feed is
+            available through:
           </s-text>
 
           <s-box
@@ -551,7 +984,15 @@ export default function Index() {
           </s-box>
 
           <s-text tone="subdued">
-            The external JSON feed is protected using Bearer token authentication. JSON, CSV and XML manual exports above are available only to authenticated Shopify Admin users.
+            The external JSON feed
+            is protected using
+            Bearer token
+            authentication. JSON,
+            CSV and XML manual
+            exports above are
+            available only to
+            authenticated Shopify
+            Admin users.
           </s-text>
         </s-stack>
       </s-section>
