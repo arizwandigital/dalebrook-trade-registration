@@ -1,76 +1,134 @@
 import { authenticate } from "../shopify.server";
 
+import {
+  ensureTradeApplicantCustomer,
+} from "../services/trade-applicant.server";
+
+
 const ALLOWED_TYPES = [
   "application/pdf",
   "image/jpeg",
   "image/png",
 ];
 
-const MAX_FILE_SIZE = 10 * 1024 * 1024;
+const MAX_FILE_SIZE =
+  10 * 1024 * 1024;
 
-async function uploadCertificate(admin, file) {
-  if (!file || !(file instanceof File) || file.size === 0) {
+
+/*
+|--------------------------------------------------------------------------
+| Upload Certificate
+|--------------------------------------------------------------------------
+*/
+async function uploadCertificate(
+  admin,
+  file
+) {
+  if (
+    !file ||
+    !(file instanceof File) ||
+    file.size === 0
+  ) {
     return null;
   }
 
-  if (!ALLOWED_TYPES.includes(file.type)) {
-    throw new Error("Certificate must be PDF, JPG or PNG.");
+  if (
+    !ALLOWED_TYPES.includes(
+      file.type
+    )
+  ) {
+    throw new Error(
+      "Certificate must be PDF, JPG or PNG."
+    );
   }
 
-  if (file.size > MAX_FILE_SIZE) {
-    throw new Error("Certificate must be 10MB or smaller.");
+  if (
+    file.size >
+    MAX_FILE_SIZE
+  ) {
+    throw new Error(
+      "Certificate must be 10MB or smaller."
+    );
   }
 
-  const stagedResponse = await admin.graphql(
-    `#graphql
-      mutation StagedUploadsCreate($input: [StagedUploadInput!]!) {
-        stagedUploadsCreate(input: $input) {
-          stagedTargets {
-            url
-            resourceUrl
-            parameters {
-              name
-              value
+  /*
+   * 1. Create staged upload
+   */
+  const stagedResponse =
+    await admin.graphql(
+      `#graphql
+        mutation StagedUploadsCreate(
+          $input: [StagedUploadInput!]!
+        ) {
+          stagedUploadsCreate(
+            input: $input
+          ) {
+            stagedTargets {
+              url
+              resourceUrl
+
+              parameters {
+                name
+                value
+              }
+            }
+
+            userErrors {
+              field
+              message
             }
           }
-
-          userErrors {
-            field
-            message
-          }
         }
+      `,
+      {
+        variables: {
+          input: [
+            {
+              filename:
+                file.name,
+
+              mimeType:
+                file.type,
+
+              resource:
+                "FILE",
+
+              httpMethod:
+                "POST",
+            },
+          ],
+        },
       }
-    `,
-    {
-      variables: {
-        input: [
-          {
-            filename: file.name,
-            mimeType: file.type,
-            resource: "FILE",
-            httpMethod: "POST",
-          },
-        ],
-      },
-    }
-  );
+    );
 
-  const stagedJson = await stagedResponse.json();
-  const stagedPayload = stagedJson?.data?.stagedUploadsCreate;
+  const stagedJson =
+    await stagedResponse.json();
 
-  if (stagedPayload?.userErrors?.length) {
+  const stagedPayload =
+    stagedJson?.data
+      ?.stagedUploadsCreate;
+
+  if (
+    stagedPayload
+      ?.userErrors
+      ?.length
+  ) {
     console.error(
       "Staged upload errors:",
       stagedPayload.userErrors
     );
 
     throw new Error(
-      stagedPayload.userErrors[0]?.message ||
+      stagedPayload
+        .userErrors[0]
+        ?.message ||
         "Unable to prepare certificate upload."
     );
   }
 
-  const target = stagedPayload?.stagedTargets?.[0];
+  const target =
+    stagedPayload
+      ?.stagedTargets?.[0];
 
   if (!target) {
     throw new Error(
@@ -78,9 +136,17 @@ async function uploadCertificate(admin, file) {
     );
   }
 
-  const uploadForm = new FormData();
 
-  for (const parameter of target.parameters) {
+  /*
+   * 2. Upload actual file
+   */
+  const uploadForm =
+    new FormData();
+
+  for (
+    const parameter
+    of target.parameters
+  ) {
     uploadForm.append(
       parameter.name,
       parameter.value
@@ -93,18 +159,22 @@ async function uploadCertificate(admin, file) {
     file.name
   );
 
-  const uploadResponse = await fetch(
-    target.url,
-    {
-      method: "POST",
-      body: uploadForm,
-    }
-  );
+  const uploadResponse =
+    await fetch(
+      target.url,
+      {
+        method: "POST",
+        body: uploadForm,
+      }
+    );
 
-  if (!uploadResponse.ok) {
-    const uploadError = await uploadResponse
-      .text()
-      .catch(() => "");
+  if (
+    !uploadResponse.ok
+  ) {
+    const uploadError =
+      await uploadResponse
+        .text()
+        .catch(() => "");
 
     console.error(
       "Certificate binary upload failed:",
@@ -116,53 +186,81 @@ async function uploadCertificate(admin, file) {
     );
   }
 
-  const fileCreateResponse = await admin.graphql(
-    `#graphql
-      mutation FileCreate($files: [FileCreateInput!]!) {
-        fileCreate(files: $files) {
-          files {
-            id
-            fileStatus
-          }
 
-          userErrors {
-            field
-            message
+  /*
+   * 3. Create permanent Shopify File
+   */
+  const fileCreateResponse =
+    await admin.graphql(
+      `#graphql
+        mutation FileCreate(
+          $files: [FileCreateInput!]!
+        ) {
+          fileCreate(
+            files: $files
+          ) {
+            files {
+              id
+              fileStatus
+            }
+
+            userErrors {
+              field
+              message
+            }
           }
         }
+      `,
+      {
+        variables: {
+          files: [
+            {
+              originalSource:
+                target.resourceUrl,
+
+              contentType:
+                "FILE",
+
+              alt:
+                `Certificate of Incorporation - ${file.name}`,
+            },
+          ],
+        },
       }
-    `,
-    {
-      variables: {
-        files: [
-          {
-            originalSource: target.resourceUrl,
-            contentType: "FILE",
-            alt: `Certificate of Incorporation - ${file.name}`,
-          },
-        ],
-      },
-    }
-  );
+    );
 
-  const fileJson = await fileCreateResponse.json();
-  const filePayload = fileJson?.data?.fileCreate;
+  const fileJson =
+    await fileCreateResponse.json();
 
-  if (filePayload?.userErrors?.length) {
+  const filePayload =
+    fileJson?.data
+      ?.fileCreate;
+
+  if (
+    filePayload
+      ?.userErrors
+      ?.length
+  ) {
     console.error(
       "File creation errors:",
       filePayload.userErrors
     );
 
     throw new Error(
-      filePayload.userErrors[0]?.message ||
+      filePayload
+        .userErrors[0]
+        ?.message ||
         "Unable to create certificate file in Shopify."
     );
   }
 
-  const createdFile = filePayload?.files?.[0];
+  const createdFile =
+    filePayload
+      ?.files?.[0];
 
-  if (!createdFile?.id) {
+  if (
+    !createdFile?.id
+  ) {
     console.error(
       "Unexpected fileCreate response:",
       fileJson
@@ -176,35 +274,60 @@ async function uploadCertificate(admin, file) {
   return createdFile.id;
 }
 
-export async function action({ request }) {
+
+/*
+|--------------------------------------------------------------------------
+| Submit Trade Registration
+|--------------------------------------------------------------------------
+*/
+export async function action({
+  request,
+}) {
   try {
+    /*
+     * Authenticate Shopify App Proxy
+     */
     let admin;
 
     try {
       const authContext =
-        await authenticate.public.appProxy(request);
+        await authenticate.public
+          .appProxy(
+            request
+          );
 
-      admin = authContext?.admin;
-    } catch (authError) {
+      admin =
+        authContext?.admin;
+    } catch (
+      authError
+    ) {
       console.error(
         "[APP PROXY AUTH FAILED]",
         {
-          name: authError?.name,
-          message: authError?.message,
-          status: authError?.status,
+          name:
+            authError?.name,
+
+          message:
+            authError?.message,
+
+          status:
+            authError?.status,
         }
       );
 
       return Response.json(
         {
           success: false,
-          message: "App proxy authentication failed.",
+
+          message:
+            "App proxy authentication failed.",
         },
         {
           status: 401,
         }
       );
     }
+
 
     if (!admin) {
       console.error(
@@ -215,7 +338,9 @@ export async function action({ request }) {
       return Response.json(
         {
           success: false,
-          message: "App proxy authentication failed.",
+
+          message:
+            "App proxy authentication failed.",
         },
         {
           status: 401,
@@ -223,24 +348,44 @@ export async function action({ request }) {
       );
     }
 
-    const formData = await request.formData();
 
-    const getValue = (key) => {
-      const value = formData.get(key);
+    /*
+     * Read submitted form
+     */
+    const formData =
+      await request.formData();
 
-      return typeof value === "string"
+    const getValue = (
+      key
+    ) => {
+      const value =
+        formData.get(key);
+
+      return typeof value ===
+        "string"
         ? value.trim()
         : "";
     };
 
+
+    /*
+     * Required fields
+     */
     const companyName =
-      getValue("company_name");
+      getValue(
+        "company_name"
+      );
 
     const contactName =
-      getValue("contact_name");
+      getValue(
+        "contact_name"
+      );
 
     const email =
-      getValue("email");
+      getValue(
+        "email"
+      );
+
 
     if (
       !companyName ||
@@ -250,6 +395,7 @@ export async function action({ request }) {
       return Response.json(
         {
           success: false,
+
           message:
             "Company name, contact name and email are required.",
         },
@@ -259,6 +405,10 @@ export async function action({ request }) {
       );
     }
 
+
+    /*
+     * Certificate
+     */
     const certificate =
       formData.get(
         "certificate_of_incorporation"
@@ -266,12 +416,17 @@ export async function action({ request }) {
 
     if (
       !certificate ||
-      !(certificate instanceof File) ||
-      certificate.size === 0
+      !(
+        certificate
+        instanceof File
+      ) ||
+      certificate.size ===
+        0
     ) {
       return Response.json(
         {
           success: false,
+
           message:
             "Certificate of Incorporation is required.",
         },
@@ -281,46 +436,70 @@ export async function action({ request }) {
       );
     }
 
+
     const certificateId =
       await uploadCertificate(
         admin,
         certificate
       );
 
-    const creditRequested = [
-      "true",
-      "on",
-      "1",
-      "yes",
-    ].includes(
-      String(
-        formData.get(
-          "apply_for_credit_terms"
-        )
-      ).toLowerCase()
-    );
 
+    /*
+     * Credit request
+     */
+    const creditRequested =
+      [
+        "true",
+        "on",
+        "1",
+        "yes",
+      ].includes(
+        String(
+          formData.get(
+            "apply_for_credit_terms"
+          )
+        ).toLowerCase()
+      );
+
+
+    /*
+|--------------------------------------------------------------------------
+| Prepare Registration Values
+|--------------------------------------------------------------------------
+*/
     const values = {
       company_name:
         companyName,
 
       address_1:
-        getValue("address_1"),
+        getValue(
+          "address_1"
+        ),
 
       address_2:
-        getValue("address_2"),
+        getValue(
+          "address_2"
+        ),
 
       country:
-        getValue("country"),
+        getValue(
+          "country"
+        ),
 
       postcode:
-        getValue("postcode"),
+        getValue(
+          "postcode"
+        ),
 
       city:
-        getValue("city"),
+        getValue(
+          "city"
+        ),
 
       county:
-        getValue("county"),
+        getValue(
+          "county"
+        ),
 
       contact_name:
         contactName,
@@ -328,7 +507,9 @@ export async function action({ request }) {
       email,
 
       phone:
-        getValue("phone"),
+        getValue(
+          "phone"
+        ),
 
       vat_registration_number:
         getValue(
@@ -370,17 +551,85 @@ export async function action({ request }) {
         "Awaiting BC",
 
       submitted_at:
-        new Date().toISOString(),
+        new Date()
+          .toISOString(),
     };
 
+
+    /*
+|--------------------------------------------------------------------------
+| Create / Find Shopify Customer
+|--------------------------------------------------------------------------
+|
+| This is the important change required by the client's ERP integration.
+|
+| Customer is created immediately so their normal Shopify Customer API
+| integration can receive the registration.
+|
+*/
+    const applicantResult =
+      await ensureTradeApplicantCustomer(
+        admin,
+        values
+      );
+
+
+    const shopifyCustomer =
+      applicantResult
+        ?.customer;
+
+
+    if (
+      !shopifyCustomer?.id
+    ) {
+      throw new Error(
+        "Unable to create or identify the Shopify customer."
+      );
+    }
+
+
+    /*
+     * Link Customer to Trade Registration
+     */
+    values.shopify_customer_id =
+      shopifyCustomer.id;
+
+
+    console.log(
+      "[TRADE APPLICANT CUSTOMER READY]",
+      {
+        customerId:
+          shopifyCustomer.id,
+
+        email:
+          shopifyCustomer.email ||
+          email,
+
+        created:
+          applicantResult.created,
+      }
+    );
+
+
+    /*
+|--------------------------------------------------------------------------
+| Create Registration Metaobject
+|--------------------------------------------------------------------------
+|
+| Metaobject remains the workflow/application record.
+| Customer is the standard ERP sync record.
+|
+*/
     const response =
       await admin.graphql(
         `#graphql
           mutation CreateTradeRegistration(
-            $metaobject: MetaobjectCreateInput!
+            $metaobject:
+              MetaobjectCreateInput!
           ) {
             metaobjectCreate(
-              metaobject: $metaobject
+              metaobject:
+                $metaobject
             ) {
               metaobject {
                 id
@@ -408,14 +657,43 @@ export async function action({ request }) {
         }
       );
 
+
     const result =
       await response.json();
 
-    const payload =
-      result?.data?.metaobjectCreate;
 
+    const payload =
+      result?.data
+        ?.metaobjectCreate;
+
+
+    /*
+     * GraphQL level errors
+     */
     if (
-      payload?.userErrors?.length
+      result?.errors
+        ?.length
+    ) {
+      console.error(
+        "Metaobject GraphQL errors:",
+        result.errors
+      );
+
+      throw new Error(
+        result.errors[0]
+          ?.message ||
+          "Unable to create trade registration."
+      );
+    }
+
+
+    /*
+     * Metaobject validation errors
+     */
+    if (
+      payload
+        ?.userErrors
+        ?.length
     ) {
       console.error(
         "Metaobject creation errors:",
@@ -425,10 +703,20 @@ export async function action({ request }) {
       return Response.json(
         {
           success: false,
+
           message:
             "Shopify could not create the registration.",
+
           errors:
             payload.userErrors,
+
+          customer: {
+            id:
+              shopifyCustomer.id,
+
+            created:
+              applicantResult.created,
+          },
         },
         {
           status: 422,
@@ -436,7 +724,10 @@ export async function action({ request }) {
       );
     }
 
-    if (!payload?.metaobject) {
+
+    if (
+      !payload?.metaobject
+    ) {
       console.error(
         "Unexpected Shopify response:",
         result
@@ -445,6 +736,7 @@ export async function action({ request }) {
       return Response.json(
         {
           success: false,
+
           message:
             "Unexpected Shopify API response.",
         },
@@ -454,10 +746,16 @@ export async function action({ request }) {
       );
     }
 
+
+    /*
+|--------------------------------------------------------------------------
+| Success
+|--------------------------------------------------------------------------
+*/
     console.log(
       "[TRADE REGISTRATION CREATED]",
       {
-        id:
+        registrationId:
           payload.metaobject.id,
 
         handle:
@@ -465,11 +763,19 @@ export async function action({ request }) {
 
         company:
           companyName,
+
+        customerId:
+          shopifyCustomer.id,
+
+        customerCreated:
+          applicantResult.created,
       }
     );
 
+
     return Response.json({
       success: true,
+
 
       registration: {
         id:
@@ -479,8 +785,29 @@ export async function action({ request }) {
           payload.metaobject.handle,
 
         displayName:
-          payload.metaobject.displayName,
+          payload.metaobject
+            .displayName,
+
+        status:
+          "Pending",
       },
+
+
+      customer: {
+        id:
+          shopifyCustomer.id,
+
+        email:
+          shopifyCustomer.email ||
+          email,
+
+        created:
+          applicantResult.created,
+
+        status:
+          "Pending Trade Approval",
+      },
+
 
       certificate: {
         id:
@@ -490,7 +817,9 @@ export async function action({ request }) {
           certificate.name,
       },
     });
-  } catch (error) {
+  } catch (
+    error
+  ) {
     console.error(
       "Trade account registration error:",
       error
@@ -499,12 +828,13 @@ export async function action({ request }) {
     return Response.json(
       {
         success: false,
+
         message:
           error?.message ||
           "Unable to submit registration.",
       },
       {
-        status: 500,
+        status: 422,
       }
     );
   }
