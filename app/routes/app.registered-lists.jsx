@@ -280,7 +280,7 @@ export default function RegisteredLists() {
   };
 
   return (
-    <s-page heading="Registered Lists">
+    <s-page heading="Registered Lists" inlineSize="large">
       <s-button
         slot="primary-action"
         onClick={() =>
