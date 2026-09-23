@@ -26,7 +26,6 @@ function getCountryCode(country = "") {
   return map[value] || "GB";
 }
 
-
 /*
 |--------------------------------------------------------------------------
 | Get Trade Registration
@@ -93,18 +92,13 @@ export async function getTradeRegistration(
   };
 }
 
-
 /*
 |--------------------------------------------------------------------------
 | Find Existing Company Contact
 |--------------------------------------------------------------------------
 |
-| A customer can already be attached to a CompanyContact from a previous
-| partial approval attempt.
-|
-| Shopify's companyAssignCustomerAsContact mutation should not be called
-| again in that case.
-|
+| Handles partially completed previous approvals.
+|--------------------------------------------------------------------------
 */
 async function getExistingCompanyContact(
   admin,
@@ -125,6 +119,10 @@ async function getExistingCompanyContact(
             company {
               id
               name
+
+              mainContact {
+                id
+              }
 
               defaultRole {
                 id
@@ -210,28 +208,22 @@ async function getExistingCompanyContact(
     }
   }
 
-  /*
-   * If there is only one B2B relationship,
-   * reuse it.
-   */
   if (profiles.length === 1) {
     return profiles[0];
   }
 
-  /*
-   * If the customer belongs to several companies
-   * and none match the registration company,
-   * don't guess.
-   */
   throw new Error(
     "This customer is already associated with multiple B2B companies and none match this registration."
   );
 }
 
-
 /*
 |--------------------------------------------------------------------------
-| Create B2B Company + Company Location
+| Create Company + Location
+|--------------------------------------------------------------------------
+|
+| No new contact is created here.
+| The Shopify Customer already exists from registration.
 |--------------------------------------------------------------------------
 */
 async function createCompanyAndLocation(
@@ -257,6 +249,10 @@ async function createCompanyAndLocation(
           company {
             id
             name
+
+            mainContact {
+              id
+            }
 
             defaultRole {
               id
@@ -396,17 +392,17 @@ async function createCompanyAndLocation(
     defaultRoleId:
       company.defaultRole?.id ||
       "",
+
+    mainContactId:
+      company.mainContact?.id ||
+      "",
   };
 }
 
-
 /*
 |--------------------------------------------------------------------------
-| Assign Existing Shopify Customer to Company
+| Assign Existing Customer as Company Contact
 |--------------------------------------------------------------------------
-|
-| This creates the CompanyContact wrapper around the existing Customer.
-|
 */
 async function assignExistingCustomer(
   admin,
@@ -496,18 +492,143 @@ async function assignExistingCustomer(
   return payload.companyContact;
 }
 
+/*
+|--------------------------------------------------------------------------
+| Assign Main Contact
+|--------------------------------------------------------------------------
+|
+| IMPORTANT FOR BUSINESS CENTRAL:
+| BC can skip B2B companies that don't have a usable main contact.
+|--------------------------------------------------------------------------
+*/
+async function assignMainContact(
+  admin,
+  companyId,
+  contactId,
+  existingMainContactId = ""
+) {
+  if (
+    !companyId ||
+    !contactId
+  ) {
+    return;
+  }
+
+  /*
+   * Already correct.
+   */
+  if (
+    existingMainContactId &&
+    existingMainContactId ===
+      contactId
+  ) {
+    console.log(
+      "[B2B] Company main contact already assigned."
+    );
+
+    return;
+  }
+
+  const response = await admin.graphql(
+    `#graphql
+      mutation AssignCompanyMainContact(
+        $companyId: ID!
+        $companyContactId: ID!
+      ) {
+        companyAssignMainContact(
+          companyId: $companyId
+          companyContactId: $companyContactId
+        ) {
+          company {
+            id
+            name
+
+            mainContact {
+              id
+
+              customer {
+                id
+                email
+                firstName
+                lastName
+              }
+            }
+          }
+
+          userErrors {
+            field
+            message
+            code
+          }
+        }
+      }
+    `,
+    {
+      variables: {
+        companyId,
+        companyContactId:
+          contactId,
+      },
+    }
+  );
+
+  const json =
+    await response.json();
+
+  if (json?.errors?.length) {
+    console.error(
+      "[B2B] Main contact GraphQL errors:",
+      json.errors
+    );
+
+    throw new Error(
+      json.errors[0]?.message ||
+        "Unable to assign company main contact."
+    );
+  }
+
+  const payload =
+    json?.data
+      ?.companyAssignMainContact;
+
+  if (
+    payload?.userErrors?.length
+  ) {
+    console.error(
+      "[B2B] Main contact assignment errors:",
+      payload.userErrors
+    );
+
+    throw new Error(
+      payload.userErrors[0]?.message ||
+        "Unable to assign company main contact."
+    );
+  }
+
+  if (
+    !payload?.company
+      ?.mainContact?.id
+  ) {
+    throw new Error(
+      "Shopify did not return the assigned company main contact."
+    );
+  }
+
+  console.log(
+    "[B2B] Main contact assigned:",
+    {
+      companyId,
+      contactId:
+        payload.company
+          .mainContact.id,
+    }
+  );
+}
 
 /*
 |--------------------------------------------------------------------------
-| Assign Company Contact Role
+| Assign Location Role
 |--------------------------------------------------------------------------
-|
-| Shopify requires a role assignment for the Company Contact at the
-| Company Location.
-|
-| Correct payload field:
-| companyContactRoleAssignment
-|
 */
 async function assignDefaultRole(
   admin,
@@ -633,18 +754,7 @@ async function assignDefaultRole(
         "Unable to assign B2B customer role."
     );
   }
-
-  if (
-    !payload
-      ?.companyContactRoleAssignment
-      ?.id
-  ) {
-    console.warn(
-      "[B2B] Role mutation completed but no role assignment ID was returned."
-    );
-  }
 }
-
 
 /*
 |--------------------------------------------------------------------------
@@ -655,9 +765,6 @@ async function updateCustomerTags(
   admin,
   customerId
 ) {
-  /*
-   * Remove pending approval tag.
-   */
   const removeResponse =
     await admin.graphql(
       `#graphql
@@ -694,11 +801,6 @@ async function updateCustomerTags(
   if (
     removeJson?.errors?.length
   ) {
-    console.error(
-      "[B2B] Remove tag GraphQL errors:",
-      removeJson.errors
-    );
-
     throw new Error(
       removeJson.errors[0]?.message ||
         "Unable to update trade applicant tags."
@@ -711,21 +813,12 @@ async function updateCustomerTags(
       ?.userErrors || [];
 
   if (removeErrors.length) {
-    console.error(
-      "[B2B] Remove tag errors:",
-      removeErrors
-    );
-
     throw new Error(
       removeErrors[0]?.message ||
         "Unable to remove pending trade tag."
     );
   }
 
-
-  /*
-   * Add approved tags.
-   */
   const addResponse =
     await admin.graphql(
       `#graphql
@@ -763,11 +856,6 @@ async function updateCustomerTags(
   if (
     addJson?.errors?.length
   ) {
-    console.error(
-      "[B2B] Add tag GraphQL errors:",
-      addJson.errors
-    );
-
     throw new Error(
       addJson.errors[0]?.message ||
         "Unable to update approved trade tags."
@@ -780,18 +868,12 @@ async function updateCustomerTags(
       ?.userErrors || [];
 
   if (addErrors.length) {
-    console.error(
-      "[B2B] Add approved tag errors:",
-      addErrors
-    );
-
     throw new Error(
       addErrors[0]?.message ||
         "Unable to add approved trade tags."
     );
   }
 }
-
 
 /*
 |--------------------------------------------------------------------------
@@ -923,19 +1005,14 @@ async function updateRegistrationApproval(
   return approvedAt;
 }
 
-
 /*
 |--------------------------------------------------------------------------
 | APPROVE TRADE REGISTRATION
 |--------------------------------------------------------------------------
 |
-| This function is intentionally idempotent.
-|
-| It can be called from:
-|
-| 1. Shopify app manual Approve button
-| 2. Future Business Central approval callback
-|
+| Safe for repeated calls.
+| Can later be called by Business Central too.
+|--------------------------------------------------------------------------
 */
 export async function approveTradeRegistration(
   admin,
@@ -956,7 +1033,6 @@ export async function approveTradeRegistration(
   const values =
     registration.values;
 
-
   /*
    * Already completely approved.
    */
@@ -968,13 +1044,9 @@ export async function approveTradeRegistration(
   ) {
     return {
       registration,
-
       created: false,
-
       recovered: false,
-
-      alreadyApproved:
-        true,
+      alreadyApproved: true,
 
       company: {
         id:
@@ -995,14 +1067,6 @@ export async function approveTradeRegistration(
     };
   }
 
-
-  /*
-   * Customer must already exist.
-   *
-   * Customer is created when trade registration
-   * is submitted so the client's standard ERP
-   * Customer API sync can see it.
-   */
   const customerId =
     values.shopify_customer_id;
 
@@ -1012,13 +1076,10 @@ export async function approveTradeRegistration(
     );
   }
 
-
   /*
-|--------------------------------------------------------------------------
-| STEP 1
-| Recover Existing B2B Relationship if Present
-|--------------------------------------------------------------------------
-*/
+   * Check whether customer is already linked
+   * from a previous partial approval.
+   */
   const existingProfile =
     await getExistingCompanyContact(
       admin,
@@ -1026,24 +1087,18 @@ export async function approveTradeRegistration(
       values.company_name
     );
 
-
   let companyId;
   let companyName;
   let locationId;
   let defaultRoleId;
   let contactId;
-
+  let existingMainContactId = "";
   let existingRoles = [];
 
   let created = false;
   let recovered = false;
 
-
   if (existingProfile) {
-    console.log(
-      "[B2B] Existing Company Contact found. Reusing existing relationship."
-    );
-
     recovered = true;
 
     companyId =
@@ -1073,6 +1128,13 @@ export async function approveTradeRegistration(
         ?.id ||
       "";
 
+    existingMainContactId =
+      existingProfile
+        ?.company
+        ?.mainContact
+        ?.id ||
+      "";
+
     contactId =
       existingProfile.id;
 
@@ -1082,7 +1144,6 @@ export async function approveTradeRegistration(
         ?.nodes ||
       [];
 
-
     if (!companyId) {
       throw new Error(
         "Existing B2B customer contact does not contain a Company ID."
@@ -1090,11 +1151,8 @@ export async function approveTradeRegistration(
     }
   } else {
     /*
-|--------------------------------------------------------------------------
-| STEP 2
-| Create Company + Location
-|--------------------------------------------------------------------------
-*/
+     * Create Company + Location.
+     */
     const company =
       await createCompanyAndLocation(
         admin,
@@ -1113,17 +1171,12 @@ export async function approveTradeRegistration(
     defaultRoleId =
       company.defaultRoleId;
 
+    existingMainContactId =
+      company.mainContactId;
 
     /*
-|--------------------------------------------------------------------------
-| STEP 3
-| Attach Existing Shopify Customer
-|--------------------------------------------------------------------------
-|
-| Shopify specifically provides companyAssignCustomerAsContact
-| for linking an existing Customer to a B2B Company.
-|
-*/
+     * Attach EXISTING Shopify Customer.
+     */
     const contact =
       await assignExistingCustomer(
         admin,
@@ -1138,13 +1191,9 @@ export async function approveTradeRegistration(
       true;
   }
 
-
   /*
-|--------------------------------------------------------------------------
-| STEP 4
-| Ensure B2B Location Role
-|--------------------------------------------------------------------------
-*/
+   * Ensure location permission.
+   */
   await assignDefaultRole(
     admin,
     contactId,
@@ -1153,37 +1202,29 @@ export async function approveTradeRegistration(
     existingRoles
   );
 
+  /*
+   * IMPORTANT:
+   * Set same contact as MAIN CONTACT
+   * so BC can import the B2B company reliably.
+   */
+  await assignMainContact(
+    admin,
+    companyId,
+    contactId,
+    existingMainContactId
+  );
 
   /*
-|--------------------------------------------------------------------------
-| STEP 5
-| Update Shopify Customer Status Tags
-|--------------------------------------------------------------------------
-|
-| Before approval:
-|
-| Trade Applicant
-| Pending Trade Approval
-|
-| After approval:
-|
-| Trade Applicant
-| Trade Customer
-| Trade Approved
-|
-*/
+   * Update customer tags.
+   */
   await updateCustomerTags(
     admin,
     customerId
   );
 
-
   /*
-|--------------------------------------------------------------------------
-| STEP 6
-| Save Company IDs to Registration Metaobject
-|--------------------------------------------------------------------------
-*/
+   * Update registration.
+   */
   await updateRegistrationApproval(
     admin,
     registration,
@@ -1195,16 +1236,11 @@ export async function approveTradeRegistration(
     }
   );
 
-
   return {
     registration,
-
     created,
-
     recovered,
-
-    alreadyApproved:
-      false,
+    alreadyApproved: false,
 
     company: {
       id:
