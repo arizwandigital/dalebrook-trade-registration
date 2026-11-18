@@ -1,7 +1,8 @@
 const express = require("express");
-const { execSync } = require("node:child_process");
+const { PrismaClient } = require("@prisma/client");
 
 const app = express();
+const prisma = new PrismaClient();
 
 const PORT = Number(process.env.PORT || 3000);
 const HOST = process.env.HOST || "0.0.0.0";
@@ -22,27 +23,37 @@ app.use(
   })
 );
 
+async function ensureSessionTable() {
+  console.log("[DATABASE] Checking Shopify Session table...");
+
+  await prisma.$executeRawUnsafe(`
+    CREATE TABLE IF NOT EXISTS "Session" (
+      "id" TEXT NOT NULL PRIMARY KEY,
+      "shop" TEXT NOT NULL,
+      "state" TEXT NOT NULL,
+      "isOnline" BOOLEAN NOT NULL DEFAULT false,
+      "scope" TEXT,
+      "expires" DATETIME,
+      "accessToken" TEXT NOT NULL,
+      "userId" BIGINT,
+      "firstName" TEXT,
+      "lastName" TEXT,
+      "email" TEXT,
+      "accountOwner" BOOLEAN NOT NULL DEFAULT false,
+      "locale" TEXT,
+      "collaborator" BOOLEAN DEFAULT false,
+      "emailVerified" BOOLEAN DEFAULT false,
+      "refreshToken" TEXT,
+      "refreshTokenExpires" DATETIME
+    );
+  `);
+
+  console.log("[DATABASE] Shopify Session table ready.");
+}
+
 async function startServer() {
   try {
-    /*
-     * Hostinger runtime may not preserve the Prisma
-     * migration result from build time, especially
-     * with SQLite.
-     *
-     * Make sure Prisma's Linux engines are executable,
-     * then create/update the Session table before
-     * Shopify session storage initializes.
-     */
-    console.log("[DATABASE] Preparing Prisma database...");
-
-    execSync(
-      "chmod +x node_modules/@prisma/engines/* && npx prisma migrate deploy",
-      {
-        stdio: "inherit",
-      }
-    );
-
-    console.log("[DATABASE] Prisma migrations completed.");
+    await ensureSessionTable();
 
     const { createRequestHandler } = await import(
       "@react-router/express"
@@ -55,9 +66,7 @@ async function startServer() {
     app.use(
       createRequestHandler({
         build,
-        mode:
-          process.env.NODE_ENV ||
-          "production",
+        mode: process.env.NODE_ENV || "production",
       })
     );
 
@@ -77,3 +86,14 @@ async function startServer() {
 }
 
 startServer();
+
+async function shutdown() {
+  try {
+    await prisma.$disconnect();
+  } finally {
+    process.exit(0);
+  }
+}
+
+process.on("SIGTERM", shutdown);
+process.on("SIGINT", shutdown);
