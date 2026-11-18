@@ -38,3 +38,4 @@ database.sqlite
 
 # Mac
 .DS_Store
+shopify.app.live-backup.toml
