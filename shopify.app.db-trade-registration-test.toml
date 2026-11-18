@@ -2,7 +2,7 @@
 
 client_id = "1903d4b912d4d3ec05a26e57e1b0b2cc"
 name = "DB Trade Registration Test"
-application_url = "https://adored-blue-hare-51.hostingersite.com"
+application_url = "https://adored-blue-hare-51.hostingersite.com/app"
 embedded = true
 
 [webhooks]
