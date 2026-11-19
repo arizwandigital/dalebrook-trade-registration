@@ -19,6 +19,12 @@ function escapeSearchValue(value = "") {
     .replace(/"/g, '\\"');
 }
 
+function normalizeEmail(value = "") {
+  return String(value)
+    .trim()
+    .toLowerCase();
+}
+
 function getCountryCode(country = "") {
   const value = String(country)
     .trim()
@@ -27,31 +33,49 @@ function getCountryCode(country = "") {
   const map = {
     "united kingdom": "GB",
     "great britain": "GB",
-    "uk": "GB",
-    "england": "GB",
-    "scotland": "GB",
-    "wales": "GB",
+    uk: "GB",
+    england: "GB",
+    scotland: "GB",
+    wales: "GB",
     "northern ireland": "GB",
-    "ireland": "IE",
+    ireland: "IE",
 
     "united states": "US",
     "united states of america": "US",
-    "usa": "US",
+    usa: "US",
 
-    "canada": "CA",
-    "australia": "AU",
+    canada: "CA",
+    australia: "AU",
     "new zealand": "NZ",
   };
 
   return map[value] || null;
 }
 
+/*
+|--------------------------------------------------------------------------
+| Find Existing Shopify Customer By Email
+|--------------------------------------------------------------------------
+|
+| This check is used BEFORE creating a trade applicant.
+| If an exact email match already exists, registration must be rejected.
+|
+*/
 async function findCustomerByEmail(
   admin,
   email
 ) {
+  const normalizedEmail =
+    normalizeEmail(email);
+
+  if (!normalizedEmail) {
+    return null;
+  }
+
   const safeEmail =
-    escapeSearchValue(email);
+    escapeSearchValue(
+      normalizedEmail
+    );
 
   const response =
     await admin.graphql(
@@ -60,7 +84,7 @@ async function findCustomerByEmail(
           $query: String!
         ) {
           customers(
-            first: 1
+            first: 10
             query: $query
           ) {
             nodes {
@@ -89,84 +113,45 @@ async function findCustomerByEmail(
     json?.errors?.length
   ) {
     console.error(
-      "[Trade Applicant] Customer search GraphQL errors:",
+      "[Trade Applicant] Customer email search GraphQL errors:",
       json.errors
     );
 
     throw new Error(
       json.errors[0]
         ?.message ||
-        "Unable to search Shopify customers."
+        "Unable to check whether this email address already exists."
     );
   }
 
-  return (
+  const customers =
     json?.data
       ?.customers
-      ?.nodes?.[0] ||
+      ?.nodes || [];
+
+  /*
+   * Do an exact case-insensitive comparison.
+   * Do not rely only on Shopify search matching.
+   */
+  const exactCustomer =
+    customers.find(
+      (customer) =>
+        normalizeEmail(
+          customer?.email
+        ) === normalizedEmail
+    );
+
+  return (
+    exactCustomer ||
     null
   );
 }
 
-async function addApplicantTags(
-  admin,
-  customerId
-) {
-  const response =
-    await admin.graphql(
-      `#graphql
-        mutation AddTradeApplicantTags(
-          $id: ID!
-          $tags: [String!]!
-        ) {
-          tagsAdd(
-            id: $id
-            tags: $tags
-          ) {
-            node {
-              id
-            }
-
-            userErrors {
-              field
-              message
-            }
-          }
-        }
-      `,
-      {
-        variables: {
-          id: customerId,
-
-          tags: [
-            "Trade Applicant",
-            "Pending Trade Approval",
-          ],
-        },
-      }
-    );
-
-  const json =
-    await response.json();
-
-  const errors =
-    json?.data
-      ?.tagsAdd
-      ?.userErrors || [];
-
-  if (errors.length) {
-    console.error(
-      "[Trade Applicant] Tag errors:",
-      errors
-    );
-
-    throw new Error(
-      errors[0]?.message ||
-        "Unable to tag trade applicant."
-    );
-  }
-}
-
+/*
+|--------------------------------------------------------------------------
+| Create Trade Applicant Customer
+|--------------------------------------------------------------------------
+*/
 async function createApplicantCustomer(
   admin,
   values
@@ -178,11 +163,6 @@ async function createApplicantCustomer(
     values.contact_name
   );
 
-  /*
-   * IMPORTANT:
-   * Create only the core customer here.
-   * Address is created separately afterwards.
-   */
   const response =
     await admin.graphql(
       `#graphql
@@ -204,6 +184,7 @@ async function createApplicantCustomer(
             userErrors {
               field
               message
+              code
             }
           }
         }
@@ -220,7 +201,9 @@ async function createApplicantCustomer(
               undefined,
 
             email:
-              values.email,
+              normalizeEmail(
+                values.email
+              ),
 
             phone:
               values.phone ||
@@ -231,6 +214,10 @@ async function createApplicantCustomer(
                 ? `Trade application: ${values.company_name}`
                 : "Trade application",
 
+            /*
+             * Keep existing static
+             * registration tags.
+             */
             tags: [
               "Trade Applicant",
               "Pending Trade Approval",
@@ -272,6 +259,12 @@ async function createApplicantCustomer(
       payload.userErrors
     );
 
+    /*
+     * Phone duplicate errors currently
+     * come from Shopify customerCreate.
+     *
+     * Preserve Shopify's actual message.
+     */
     throw new Error(
       payload.userErrors[0]
         ?.message ||
@@ -297,6 +290,11 @@ async function createApplicantCustomer(
   return payload.customer;
 }
 
+/*
+|--------------------------------------------------------------------------
+| Create Customer Address
+|--------------------------------------------------------------------------
+*/
 async function createCustomerAddress(
   admin,
   customerId,
@@ -399,6 +397,7 @@ async function createCustomerAddress(
             userErrors {
               field
               message
+              code
             }
           }
         }
@@ -460,62 +459,92 @@ async function createCustomerAddress(
   );
 }
 
+/*
+|--------------------------------------------------------------------------
+| Ensure Trade Applicant Customer
+|--------------------------------------------------------------------------
+|
+| Rules:
+|
+| 1. Email is required.
+| 2. Existing Shopify email = REJECT registration.
+| 3. New email = create Shopify customer.
+| 4. Duplicate phone is still rejected by Shopify customerCreate.
+| 5. Address is created only after customer creation succeeds.
+|
+*/
 export async function ensureTradeApplicantCustomer(
   admin,
   values
 ) {
-  if (!values.email) {
+  const email =
+    normalizeEmail(
+      values.email
+    );
+
+  if (!email) {
     throw new Error(
       "Email is required to create a trade applicant."
     );
   }
 
   /*
-   * First see if this email already
-   * exists as a Shopify Customer.
+   * IMPORTANT:
+   *
+   * Do not reuse an existing Shopify customer.
+   * A trade registration must use a unique
+   * customer email address.
    */
-  let customer =
+  const existingCustomer =
     await findCustomerByEmail(
       admin,
-      values.email
+      email
     );
 
-  let created = false;
+  if (existingCustomer?.id) {
+    console.warn(
+      "[Trade Applicant] Duplicate email rejected:",
+      {
+        customerId:
+          existingCustomer.id,
 
-  if (customer) {
-    /*
-     * Existing customer:
-     * do not create a duplicate.
-     */
-    await addApplicantTags(
-      admin,
-      customer.id
+        email,
+      }
     );
-  } else {
-    /*
-     * New customer.
-     */
-    customer =
-      await createApplicantCustomer(
-        admin,
-        values
-      );
 
-    created = true;
-
-    /*
-     * Only create the address for
-     * newly-created customers for now.
-     */
-    await createCustomerAddress(
-      admin,
-      customer.id,
-      values
+    throw new Error(
+      "A customer with this email address already exists."
     );
   }
 
+  /*
+   * Email is unique.
+   *
+   * Now attempt customer creation.
+   * Shopify customerCreate will also validate
+   * duplicate phone numbers.
+   */
+  const customer =
+    await createApplicantCustomer(
+      admin,
+      {
+        ...values,
+        email,
+      }
+    );
+
+  /*
+   * Only create the address after
+   * customer creation succeeds.
+   */
+  await createCustomerAddress(
+    admin,
+    customer.id,
+    values
+  );
+
   return {
     customer,
-    created,
+    created: true,
   };
 }
