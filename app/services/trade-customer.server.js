@@ -1,3 +1,7 @@
+import {
+  getApprovedExtraTags,
+} from "./trade-settings.server";
+
 function fieldMap(fields = []) {
   return Object.fromEntries(
     fields.map((field) => [
@@ -765,6 +769,10 @@ async function updateCustomerTags(
   admin,
   customerId
 ) {
+  /*
+   * Remove the existing static pending tag.
+   * This behavior stays exactly as before.
+   */
   const removeResponse =
     await admin.graphql(
       `#graphql
@@ -785,8 +793,7 @@ async function updateCustomerTags(
       `,
       {
         variables: {
-          id:
-            customerId,
+          id: customerId,
 
           tags: [
             "Pending Trade Approval",
@@ -801,6 +808,11 @@ async function updateCustomerTags(
   if (
     removeJson?.errors?.length
   ) {
+    console.error(
+      "[B2B] Remove pending tag GraphQL errors:",
+      removeJson.errors
+    );
+
     throw new Error(
       removeJson.errors[0]?.message ||
         "Unable to update trade applicant tags."
@@ -813,11 +825,53 @@ async function updateCustomerTags(
       ?.userErrors || [];
 
   if (removeErrors.length) {
+    console.error(
+      "[B2B] Remove pending tag errors:",
+      removeErrors
+    );
+
     throw new Error(
       removeErrors[0]?.message ||
         "Unable to remove pending trade tag."
     );
   }
+
+  /*
+   * Keep the existing approved tags STATIC.
+   */
+  const staticApprovedTags = [
+    "Trade Customer",
+    "Trade Approved",
+  ];
+
+  /*
+   * Load optional extra approval tags configured by
+   * the client in the trade_app_settings metaobject.
+   *
+   * Example:
+   * B2B
+   * Wholesale
+   * Trade
+   */
+  const extraApprovedTags =
+    await getApprovedExtraTags(
+      admin
+    );
+
+  /*
+   * Combine static + dynamic tags and remove duplicates.
+   */
+  const approvedTags = [
+    ...new Set([
+      ...staticApprovedTags,
+      ...extraApprovedTags,
+    ]),
+  ];
+
+  console.log(
+    "[B2B] Approved customer tags:",
+    approvedTags
+  );
 
   const addResponse =
     await admin.graphql(
@@ -839,13 +893,8 @@ async function updateCustomerTags(
       `,
       {
         variables: {
-          id:
-            customerId,
-
-          tags: [
-            "Trade Customer",
-            "Trade Approved",
-          ],
+          id: customerId,
+          tags: approvedTags,
         },
       }
     );
@@ -856,6 +905,11 @@ async function updateCustomerTags(
   if (
     addJson?.errors?.length
   ) {
+    console.error(
+      "[B2B] Add approved tags GraphQL errors:",
+      addJson.errors
+    );
+
     throw new Error(
       addJson.errors[0]?.message ||
         "Unable to update approved trade tags."
@@ -868,6 +922,11 @@ async function updateCustomerTags(
       ?.userErrors || [];
 
   if (addErrors.length) {
+    console.error(
+      "[B2B] Add approved tags errors:",
+      addErrors
+    );
+
     throw new Error(
       addErrors[0]?.message ||
         "Unable to add approved trade tags."
