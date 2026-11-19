@@ -184,7 +184,6 @@ async function createApplicantCustomer(
             userErrors {
               field
               message
-              code
             }
           }
         }
@@ -260,7 +259,7 @@ async function createApplicantCustomer(
     );
 
     /*
-     * Phone duplicate errors currently
+     * Duplicate phone errors currently
      * come from Shopify customerCreate.
      *
      * Preserve Shopify's actual message.
@@ -397,7 +396,6 @@ async function createCustomerAddress(
             userErrors {
               field
               message
-              code
             }
           }
         }
